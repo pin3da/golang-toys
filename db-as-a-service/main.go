@@ -31,6 +31,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	go NewCompactor(manager, DefaultCompactionInterval).Run(ctx)
+
 	go func() {
 		log.Printf("listening on %s, data dir %s", *addr, *data)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

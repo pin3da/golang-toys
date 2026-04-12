@@ -102,6 +102,24 @@ func (m *DBManager) Delete(name string) error {
 	return removeDir(m.dbDir(name))
 }
 
+// createWithThreshold is like [DBManager.Create] but uses a custom flush
+// threshold. Intended for tests that need fine-grained control over when
+// SSTable flushes occur.
+func (m *DBManager) createWithThreshold(name string, threshold int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.dbs[name]; exists {
+		return errAlreadyExists(name)
+	}
+	db, err := microcassandra.OpenWithThreshold(m.dbDir(name), threshold)
+	if err != nil {
+		return fmt.Errorf("create database %q: %w", name, err)
+	}
+	m.dbs[name] = db
+	return nil
+}
+
 // CloseAll closes every open database. Intended for graceful shutdown.
 // All databases are attempted; the first error is returned.
 func (m *DBManager) CloseAll() error {
