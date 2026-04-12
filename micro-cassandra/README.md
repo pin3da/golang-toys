@@ -26,7 +26,7 @@ Implement the essential read/write storage loop in under one hour (including tes
 
 ## Data model
 
-Simple `string → string` key-value store. Keys are sorted lexicographically within each SSTable.
+Simple `string -> string` key-value store. Keys are sorted lexicographically within each SSTable.
 
 ## API (target)
 

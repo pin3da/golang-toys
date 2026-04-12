@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 )
 
 // SSTable is an immutable, sorted, on-disk key-value store flushed from a
@@ -136,6 +137,35 @@ func (s *SSTable) entries() ([]entry, error) {
 		}
 		result = append(result, entry{k, v})
 	}
+}
+
+// mergeEntries merges entries from all SSTables newest-to-oldest, keeping only
+// the first (newest) occurrence of each key. The result is sorted by key, ready
+// to flush as a single SSTable.
+//
+// Preconditions: sstables is ordered oldest-first (index 0 is oldest).
+// Returns an error if any SSTable cannot be read.
+func mergeEntries(sstables []*SSTable) ([]entry, error) {
+	seen := make(map[string]bool)
+	var merged []entry
+	// Walk newest-to-oldest so first occurrence of each key is the latest write.
+	for i := len(sstables) - 1; i >= 0; i-- {
+		entries, err := sstables[i].entries()
+		if err != nil {
+			return nil, fmt.Errorf("merge: read sstable %s: %w", sstables[i].path, err)
+		}
+		for _, e := range entries {
+			if !seen[e.key] {
+				seen[e.key] = true
+				merged = append(merged, e)
+			}
+		}
+	}
+	// Re-sort: merged is newest-biased order, but SSTables require lexicographic order.
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].key < merged[j].key
+	})
+	return merged, nil
 }
 
 // readField reads a length-prefixed field written by writeField.
