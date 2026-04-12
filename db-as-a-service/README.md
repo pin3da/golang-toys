@@ -121,3 +121,57 @@ go run . -addr :8080 -data ./data
 |------|---------|-------------|
 | `-addr` | `:8080` | Listen address |
 | `-data` | `./data` | Root directory for database storage |
+
+## Testing from the CLI
+
+Start the server in one terminal, then run these commands in another.
+
+**Health check:**
+```sh
+curl -s http://localhost:8080/health
+# -> {"status":"ok"}
+```
+
+**Create a database:**
+```sh
+curl -s -X POST http://localhost:8080/databases/mydb
+# -> {"name":"mydb"}
+```
+
+**Write a key:**
+```sh
+curl -s -X PUT http://localhost:8080/databases/mydb/keys/greeting \
+  -H 'Content-Type: application/json' \
+  -d '{"value": "hello world"}'
+# -> {"key":"greeting","value":"hello world"}
+```
+
+**Read a key:**
+```sh
+curl -s http://localhost:8080/databases/mydb/keys/greeting
+# -> {"key":"greeting","value":"hello world"}
+```
+
+**Read a missing key:**
+```sh
+curl -s http://localhost:8080/databases/mydb/keys/nope
+# -> {"error":"key not found"}
+```
+
+**List databases:**
+```sh
+curl -s http://localhost:8080/databases
+# -> {"databases":["mydb"]}
+```
+
+**Database stats:**
+```sh
+curl -s http://localhost:8080/databases/mydb/stats
+# -> {"name":"mydb","sstable_count":0}
+```
+
+**Delete a database:**
+```sh
+curl -s -X DELETE http://localhost:8080/databases/mydb
+# -> {"name":"mydb"}
+```

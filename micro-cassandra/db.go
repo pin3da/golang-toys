@@ -15,6 +15,15 @@ const (
 	sstableGlob = "sstable-*.sst"
 )
 
+// Stats holds a point-in-time snapshot of DB metrics.
+type Stats struct {
+	// SSTableCount is the number of on-disk SSTable files.
+	SSTableCount int
+	// MemtableSize is the number of entries currently held in the memtable,
+	// i.e. not yet flushed to disk.
+	MemtableSize int
+}
+
 // DB orchestrates a [Memtable] and an ordered list of on-disk [SSTable] files.
 // Writes land in the memtable; when the memtable reaches its row threshold the
 // DB flushes it to a new SSTable automatically. Reads check the memtable first,
@@ -61,6 +70,17 @@ func OpenWithThreshold(dir string, threshold int) (*DB, error) {
 // Dir returns the storage directory this DB was opened with.
 func (db *DB) Dir() string {
 	return db.dir
+}
+
+// Stats returns a point-in-time snapshot of DB metrics.
+// Safe for concurrent use by multiple goroutines.
+func (db *DB) Stats() Stats {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return Stats{
+		SSTableCount: len(db.sstables),
+		MemtableSize: db.memtable.size(),
+	}
 }
 
 // Put writes key->value into the memtable. If the memtable reaches the flush

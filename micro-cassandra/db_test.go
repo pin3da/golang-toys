@@ -172,6 +172,65 @@ func TestDB_Close_FlushesMemtable(t *testing.T) {
 	mustGet(t, db2, "persist", "yes", true)
 }
 
+func TestDB_Stats(t *testing.T) {
+	tests := []struct {
+		name         string
+		threshold    int
+		puts         [][2]string
+		wantSSTables int
+		wantMemtable int
+	}{
+		{
+			name:         "empty db",
+			threshold:    128,
+			puts:         nil,
+			wantSSTables: 0,
+			wantMemtable: 0,
+		},
+		{
+			name:         "entries below flush threshold stay in memtable",
+			threshold:    128,
+			puts:         [][2]string{{"a", "1"}, {"b", "2"}},
+			wantSSTables: 0,
+			wantMemtable: 2,
+		},
+		{
+			name:         "flush produces one sstable",
+			threshold:    2,
+			puts:         [][2]string{{"a", "1"}, {"b", "2"}},
+			wantSSTables: 1,
+			wantMemtable: 0,
+		},
+		{
+			name:         "two flushes produce two sstables",
+			threshold:    2,
+			puts:         [][2]string{{"a", "1"}, {"b", "2"}, {"c", "3"}, {"d", "4"}},
+			wantSSTables: 2,
+			wantMemtable: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := microcassandra.OpenWithThreshold(t.TempDir(), tt.threshold)
+			if err != nil {
+				t.Fatalf("OpenWithThreshold() error = %v", err)
+			}
+			for _, kv := range tt.puts {
+				mustPut(t, db, kv[0], kv[1])
+			}
+
+			got := db.Stats()
+			if got.SSTableCount != tt.wantSSTables {
+				t.Errorf("Stats().SSTableCount = %d, want %d", got.SSTableCount, tt.wantSSTables)
+			}
+			if got.MemtableSize != tt.wantMemtable {
+				t.Errorf("Stats().MemtableSize = %d, want %d", got.MemtableSize, tt.wantMemtable)
+			}
+		})
+	}
+}
+
 func TestDB_Reopen(t *testing.T) {
 	dir := t.TempDir()
 
