@@ -48,7 +48,16 @@ db.Close() error
 
 ## SSTable file format
 
-Each SSTable is a plain text file (one `key\tvalue\n` line per entry, sorted by key). Simple enough to inspect with standard tools; real Cassandra uses a binary format.
+Each SSTable is a binary file. Entries are written in ascending lexicographic key order. Each entry is encoded as:
+
+```
+[4-byte big-endian uint32: key length]
+[key bytes]
+[4-byte big-endian uint32: value length]
+[value bytes]
+```
+
+No delimiters or padding between entries. This handles arbitrary bytes in keys and values without escaping. The 4-byte length prefix limits each key and value to at most 2³²−1 bytes (~4 GiB).
 
 SSTable files are artificially capped to a few KB to force the DB to scan multiple files (and then use smarter filtering).
 
