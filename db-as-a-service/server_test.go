@@ -249,3 +249,4 @@ func TestServer_PutKeyBadBody(t *testing.T) {
 		t.Errorf("PUT bad body = %d, want 400", resp.StatusCode)
 	}
 }
+

@@ -1,2 +1,6 @@
+# binary
 db-as-a-service
 server
+
+# Server data
+data/**
