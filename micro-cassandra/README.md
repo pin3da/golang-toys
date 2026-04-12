@@ -57,7 +57,7 @@ Each SSTable is a binary file. Entries are written in ascending lexicographic ke
 [value bytes]
 ```
 
-No delimiters or padding between entries. This handles arbitrary bytes in keys and values without escaping. The 4-byte length prefix limits each key and value to at most 2³²−1 bytes (~4 GiB).
+No delimiters or padding between entries. This handles arbitrary bytes in keys and values without escaping. The 4-byte length prefix limits each key and value to at most 2^32−1 bytes (~4 GiB).
 
 SSTable files are artificially capped to a few KB to force the DB to scan multiple files (and then use smarter filtering).
 
