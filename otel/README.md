@@ -5,10 +5,10 @@ and aggregates counter values in memory.
 
 ## Endpoints
 
-| Method | Path          | Description                                          |
-|--------|---------------|------------------------------------------------------|
-| POST   | /v1/metrics   | Ingest OTLP metrics (application/x-protobuf)         |
-| GET    | /metrics      | Query all aggregated series as JSON                  |
+| Method | Path        | Description                                  |
+| ------ | ----------- | -------------------------------------------- |
+| POST   | /v1/metrics | Ingest OTLP metrics (application/x-protobuf) |
+| GET    | /metrics    | Query all aggregated series as JSON          |
 
 ## Run
 
@@ -51,7 +51,7 @@ fingerprinted as a sorted `key=value,...` string so they can serve as a map key.
 [
   {
     "name": "http.server.request.duration",
-    "attributes": {"http.method": "GET", "http.status_code": "200"},
+    "attributes": { "http.method": "GET", "http.status_code": "200" },
     "value": 10482
   }
 ]
