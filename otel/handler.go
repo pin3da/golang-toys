@@ -105,7 +105,7 @@ func parseFingerprint(fp string) map[string]string {
 	if fp == "" {
 		return attrs
 	}
-	for _, pair := range strings.Split(fp, ",") {
+	for pair := range strings.SplitSeq(fp, ",") {
 		k, v, _ := strings.Cut(pair, "=")
 		attrs[k] = v
 	}
