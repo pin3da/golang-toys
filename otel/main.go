@@ -3,10 +3,11 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 )
 
 func main() {
-	store := NewStore()
+	store := NewWindowedStore(10, time.Minute)
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/metrics", IngestHandler(store))

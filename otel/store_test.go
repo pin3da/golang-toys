@@ -4,128 +4,204 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
+	"time"
 
 	. "otel"
 )
 
-func TestStore_SetAndGetAll(t *testing.T) {
-	s := NewStore()
+var t0 = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	keyA := SeriesKey{Name: "http.requests", Attributes: "method=GET,status=200"}
-	keyB := SeriesKey{Name: "http.requests", Attributes: "method=POST,status=500"}
+func TestWindowedStore_SetAndGet(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+	key := SeriesKey{Name: "http.requests", Attributes: "method=GET"}
 
-	s.Set(keyA, 10)
-	s.Set(keyB, 3)
+	store.Set(key, 42, t0)
 
-	got := s.GetAll()
-	want := map[SeriesKey]float64{
-		keyA: 10,
-		keyB: 3,
+	windows, total := store.GetWindows(1, t0)
+
+	if len(windows) != 1 {
+		t.Fatalf("GetWindows(1) = %d windows, want 1", len(windows))
 	}
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("GetAll() mismatch (-want +got):\n%s", diff)
+	if got := windows[0].Series[key]; got != 42 {
+		t.Errorf("windows[0][key] = %v, want 42", got)
+	}
+	if got := total[key]; got != 42 {
+		t.Errorf("total[key] = %v, want 42", got)
 	}
 }
 
-func TestStore_SetOverwrites(t *testing.T) {
-	s := NewStore()
-
+func TestWindowedStore_OverwriteInSameWindow(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
 	key := SeriesKey{Name: "cpu.usage", Attributes: "host=a"}
-	s.Set(key, 50)
-	s.Set(key, 75)
 
-	got := s.GetAll()
-	if got[key] != 75 {
-		t.Errorf("Set() overwrite: got %v, want 75", got[key])
+	store.Set(key, 10, t0)
+	store.Set(key, 99, t0.Add(30*time.Second))
+
+	_, total := store.GetWindows(1, t0)
+	if got := total[key]; got != 99 {
+		t.Errorf("total[key] = %v, want 99", got)
 	}
 }
 
-func TestStore_GetAllReturnsCopy(t *testing.T) {
-	s := NewStore()
-
+func TestWindowedStore_MultipleWindowsOldestFirst(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
 	key := SeriesKey{Name: "reqs", Attributes: ""}
-	s.Set(key, 1)
 
-	snapshot := s.GetAll()
-	snapshot[key] = 999 // mutate the copy
+	for i := range 3 {
+		store.Set(key, float64(i+1), t0.Add(time.Duration(i)*time.Minute))
+	}
 
-	got := s.GetAll()
-	if got[key] != 1 {
-		t.Errorf("GetAll() returned a reference, not a copy: got %v, want 1", got[key])
+	windows, total := store.GetWindows(3, t0.Add(2*time.Minute))
+
+	if len(windows) != 3 {
+		t.Fatalf("GetWindows(3) = %d windows, want 3", len(windows))
+	}
+	for i, w := range windows {
+		want := float64(i + 1)
+		if got := w.Series[key]; got != want {
+			t.Errorf("windows[%d][key] = %v, want %v", i, got, want)
+		}
+	}
+	if got := total[key]; got != 6 {
+		t.Errorf("total[key] = %v, want 6", got)
 	}
 }
 
-func TestStore_ConcurrentDistinctKeys(t *testing.T) {
+func TestWindowedStore_WindowStartTimestamp(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+	key := SeriesKey{Name: "x", Attributes: ""}
+
+	store.Set(key, 1, t0)
+
+	windows, _ := store.GetWindows(1, t0)
+	if len(windows) != 1 {
+		t.Fatalf("GetWindows(1) = %d windows, want 1", len(windows))
+	}
+
+	wantStart := t0.Truncate(time.Minute)
+	if got := windows[0].Start; !got.Equal(wantStart) {
+		t.Errorf("windows[0].Start = %v, want %v", got, wantStart)
+	}
+}
+
+func TestWindowedStore_NowBoundsQuery(t *testing.T) {
+	store := NewWindowedStore(4, time.Minute)
+	key := SeriesKey{Name: "reqs", Attributes: ""}
+
+	store.Set(key, 10, t0)
+	store.Set(key, 20, t0.Add(1*time.Minute))
+	store.Set(key, 30, t0.Add(2*time.Minute))
+	store.Set(key, 40, t0.Add(3*time.Minute))
+
+	windows, total := store.GetWindows(4, t0.Add(2*time.Minute))
+
+	if len(windows) != 3 {
+		t.Fatalf("GetWindows(4) at epoch 2 = %d windows, want 3", len(windows))
+	}
+	if got := windows[0].Series[key]; got != 10 {
+		t.Errorf("windows[0][key] = %v, want 10", got)
+	}
+	if got := windows[1].Series[key]; got != 20 {
+		t.Errorf("windows[1][key] = %v, want 20", got)
+	}
+	if got := windows[2].Series[key]; got != 30 {
+		t.Errorf("windows[2][key] = %v, want 30", got)
+	}
+	if got := total[key]; got != 60 {
+		t.Errorf("total[key] = %v, want 60", got)
+	}
+}
+
+func TestWindowedStore_BucketRotation(t *testing.T) {
+	const numBuckets = 3
+	store := NewWindowedStore(numBuckets, time.Minute)
+	key := SeriesKey{Name: "metric", Attributes: ""}
+
+	store.Set(key, float64(10), t0.Add(time.Duration(0)*time.Minute))
+	store.Set(key, float64(11), t0.Add(time.Duration(1)*time.Minute))
+	store.Set(key, float64(12), t0.Add(time.Duration(2)*time.Minute))
+
+	windows, _ := store.GetWindows(numBuckets, t0.Add(2*time.Minute))
+	if len(windows) != 3 {
+		t.Errorf("GetWindows(%d) = %d, want 3", numBuckets, len(windows))
+	}
+
+	store.Set(key, 99, t0.Add(4*time.Minute)) // slot 1, should trigger eviction for 0.
+	windows, _ = store.GetWindows(numBuckets, t0.Add(2*time.Minute))
+	if len(windows) != 1 {
+		t.Errorf("GetWindows(%d) = %d, want 1", numBuckets, len(windows))
+	}
+
+	for _, w := range windows {
+		if v, ok := w.Series[key]; ok && v == 10 {
+			t.Errorf("evicted value 10 is still visible in window starting at %v", w.Start)
+		}
+	}
+}
+
+func TestWindowedStore_GetWindowsCapped(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+	key := SeriesKey{Name: "x", Attributes: ""}
+
+	store.Set(key, 1, t0)
+
+	windows, _ := store.GetWindows(100, t0)
+	if len(windows) != 1 {
+		t.Errorf("GetWindows(100) = %d windows, want 1", len(windows))
+	}
+}
+
+func TestWindowedStore_EmptyStore(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+
+	windows, total := store.GetWindows(5, t0)
+
+	if len(windows) != 0 {
+		t.Errorf("got %d windows, want 0", len(windows))
+	}
+	if len(total) != 0 {
+		t.Errorf("total has %d entries, want 0", len(total))
+	}
+}
+
+func TestWindowedStore_ConcurrentDistinctKeys(t *testing.T) {
 	const goroutines = 50
 
-	s := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 	var wg sync.WaitGroup
-
 	wg.Add(goroutines)
 	for i := range goroutines {
 		go func(i int) {
 			defer wg.Done()
 			key := SeriesKey{Name: "metric", Attributes: fmt.Sprintf("id=%d", i)}
-			s.Set(key, float64(i))
+			store.Set(key, float64(i), t0)
 		}(i)
 	}
 	wg.Wait()
 
-	got := s.GetAll()
-	if len(got) != goroutines {
-		t.Errorf("GetAll() returned %d series, want %d", len(got), goroutines)
+	_, total := store.GetWindows(1, t0)
+	if len(total) != goroutines {
+		t.Errorf("total has %d series, want %d", len(total), goroutines)
 	}
 }
 
-func TestStore_ConcurrentSameKey(t *testing.T) {
-	const goroutines = 50
-
-	s := NewStore()
-	key := SeriesKey{Name: "metric", Attributes: "host=a"}
-
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
-		go func(i int) {
-			defer wg.Done()
-			s.Set(key, float64(i))
-		}(i)
-	}
-	wg.Wait()
-
-	got := s.GetAll()
-	v, ok := got[key]
-	if !ok {
-		t.Fatal("key missing from store after concurrent writes")
-	}
-	if v < 0 || v >= goroutines {
-		t.Errorf("value %v is outside the range of written values [0, %d)", v, goroutines)
-	}
-}
-
-func TestStore_ConcurrentReadsAndWrites(t *testing.T) {
+func TestWindowedStore_ConcurrentReadsAndWrites(t *testing.T) {
 	const goroutines = 20
 
-	s := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 	key := SeriesKey{Name: "metric", Attributes: ""}
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines * 2)
-
 	for i := range goroutines {
 		go func(i int) {
 			defer wg.Done()
-			s.Set(key, float64(i))
+			store.Set(key, float64(i), t0.Add(time.Duration(i%2)*time.Minute))
 		}(i)
-
 		go func() {
 			defer wg.Done()
-			_ = s.GetAll()
+			store.GetWindows(5, t0.Add(3*time.Minute))
 		}()
 	}
-
 	wg.Wait()
 }

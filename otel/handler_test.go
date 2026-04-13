@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -55,15 +56,27 @@ func otlpCounter(t *testing.T, name string, value float64, attrs ...string) []by
 	return b
 }
 
-// response mirrors the JSON shape returned by QueryHandler.
-type response struct {
+// testSeriesResponse mirrors the JSON shape of a single series entry.
+type testSeriesResponse struct {
 	Name       string            `json:"name"`
 	Attributes map[string]string `json:"attributes"`
 	Value      float64           `json:"value"`
 }
 
+// testWindowedResponse mirrors the JSON shape returned by QueryHandler.
+type testWindowedResponse struct {
+	Buckets []testBucketResponse `json:"buckets"`
+	Total   []testSeriesResponse `json:"total"`
+}
+
+// testBucketResponse mirrors a single bucket in the windowed response.
+type testBucketResponse struct {
+	Start  time.Time            `json:"start"`
+	Series []testSeriesResponse `json:"series"`
+}
+
 func TestIngestHandler_ValidCounter(t *testing.T) {
-	store := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 	body := otlpCounter(t, "http.requests", 42, "method", "GET", "status", "200")
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader(body))
@@ -76,19 +89,19 @@ func TestIngestHandler_ValidCounter(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	series := store.GetAll()
-	if len(series) != 1 {
-		t.Fatalf("store has %d series, want 1", len(series))
+	// The write lands in the current open window; one window is returned.
+	windows, _ := store.GetWindows(1, time.Now())
+	if len(windows) != 1 {
+		t.Fatalf("store has %d windows, want 1", len(windows))
 	}
-	for _, v := range series {
-		if v != 42 {
-			t.Errorf("value = %v, want 42", v)
-		}
+	key := SeriesKey{Name: "http.requests", Attributes: "method=GET,status=200"}
+	if v := windows[0].Series[key]; v != 42 {
+		t.Errorf("series value = %v, want 42", v)
 	}
 }
 
 func TestIngestHandler_InvalidBody(t *testing.T) {
-	store := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader([]byte("not protobuf")))
 	r.Header.Set("Content-Type", "application/x-protobuf")
@@ -102,7 +115,7 @@ func TestIngestHandler_InvalidBody(t *testing.T) {
 }
 
 func TestIngestHandler_MultipleDataPoints(t *testing.T) {
-	store := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 
 	// Two separate requests, different attribute sets.
 	for _, tc := range []struct {
@@ -122,13 +135,14 @@ func TestIngestHandler_MultipleDataPoints(t *testing.T) {
 		}
 	}
 
-	if got := store.GetAll(); len(got) != 2 {
-		t.Errorf("store has %d series, want 2", len(got))
+	_, total := store.GetWindows(1, time.Now())
+	if len(total) != 2 {
+		t.Errorf("total has %d series, want 2", len(total))
 	}
 }
 
 func TestQueryHandler_Empty(t *testing.T) {
-	store := NewStore()
+	store := NewWindowedStore(5, time.Minute)
 
 	r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	w := httptest.NewRecorder()
@@ -139,20 +153,23 @@ func TestQueryHandler_Empty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var got []response
+	var got testWindowedResponse
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("got %d items, want 0", len(got))
+	if len(got.Buckets) != 0 {
+		t.Errorf("got %d buckets, want 0", len(got.Buckets))
+	}
+	if len(got.Total) != 0 {
+		t.Errorf("got %d total entries, want 0", len(got.Total))
 	}
 }
 
 func TestQueryHandler_ReturnsSeries(t *testing.T) {
-	store := NewStore()
-	store.Set(SeriesKey{Name: "http.requests", Attributes: "method=GET,status=200"}, 42)
+	store := NewWindowedStore(5, time.Minute)
+	store.Set(SeriesKey{Name: "http.requests", Attributes: "method=GET,status=200"}, 42, time.Now())
 
-	r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r := httptest.NewRequest(http.MethodGet, "/metrics?windows=1", nil)
 	w := httptest.NewRecorder()
 
 	QueryHandler(store).ServeHTTP(w, r)
@@ -161,21 +178,34 @@ func TestQueryHandler_ReturnsSeries(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
-	var got []response
+	var got testWindowedResponse
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	want := []response{
+	wantTotal := []testSeriesResponse{
 		{
 			Name:       "http.requests",
 			Attributes: map[string]string{"method": "GET", "status": "200"},
 			Value:      42,
 		},
 	}
-	if diff := cmp.Diff(want, got, cmpopts.SortSlices(func(a, b response) bool {
+	if diff := cmp.Diff(wantTotal, got.Total, cmpopts.SortSlices(func(a, b testSeriesResponse) bool {
 		return a.Name < b.Name
 	})); diff != "" {
-		t.Errorf("response mismatch (-want +got):\n%s", diff)
+		t.Errorf("total mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestQueryHandler_InvalidWindowsParam(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+
+	for _, bad := range []string{"abc", "0", "-1"} {
+		r := httptest.NewRequest(http.MethodGet, "/metrics?windows="+bad, nil)
+		w := httptest.NewRecorder()
+		QueryHandler(store).ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("?windows=%s: status = %d, want 400", bad, w.Code)
+		}
 	}
 }

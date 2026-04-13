@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	collectormv1 "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
@@ -21,7 +23,7 @@ import (
 // silently ignored.
 //
 // Returns 200 on success, 400 if the body cannot be decoded.
-func IngestHandler(store *Store) http.HandlerFunc {
+func IngestHandler(store *WindowedStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -35,6 +37,7 @@ func IngestHandler(store *Store) http.HandlerFunc {
 			return
 		}
 
+		now := time.Now()
 		for _, rm := range req.ResourceMetrics {
 			for _, sm := range rm.ScopeMetrics {
 				for _, m := range sm.Metrics {
@@ -47,7 +50,7 @@ func IngestHandler(store *Store) http.HandlerFunc {
 							Name:       m.Name,
 							Attributes: fingerprintAttrs(dp.Attributes),
 						}
-						store.Set(key, dataPointValue(dp))
+						store.Set(key, dataPointValue(dp), now)
 					}
 				}
 			}
@@ -57,21 +60,54 @@ func IngestHandler(store *Store) http.HandlerFunc {
 	}
 }
 
+// windowedQueryResponse is the JSON shape returned by QueryHandler.
+type windowedQueryResponse struct {
+	Buckets []bucketResponse `json:"buckets"`
+	Total   []seriesResponse `json:"total"`
+}
+
+// bucketResponse is one time window within the windowed query response.
+type bucketResponse struct {
+	Start  time.Time        `json:"start"`
+	Series []seriesResponse `json:"series"`
+}
+
+// seriesResponse holds a single metric series name, attributes, and value.
+type seriesResponse struct {
+	Name       string            `json:"name"`
+	Attributes map[string]string `json:"attributes"`
+	Value      float64           `json:"value"`
+}
+
 // QueryHandler handles GET /metrics.
 //
-// Returns all aggregated series as a JSON array. Each element contains the
-// metric name, its attributes, and the latest recorded value. Returns 200 with
-// an empty array when no series have been ingested yet.
-func QueryHandler(store *Store) http.HandlerFunc {
+// The optional ?windows=N query parameter controls how many recent time windows
+// to include (must be a positive integer). When omitted, all stored windows are
+// returned. The response includes per-bucket breakdowns and a rolled-up total.
+//
+// Returns 200 with JSON on success, 400 if ?windows is present but invalid.
+func QueryHandler(store *WindowedStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		series := store.GetAll()
+		n := maxWindows
+		if s := r.URL.Query().Get("windows"); s != "" {
+			v, err := strconv.Atoi(s)
+			if err != nil || v <= 0 {
+				http.Error(w, "windows must be a positive integer", http.StatusBadRequest)
+				return
+			}
+			n = v
+		}
 
-		resp := make([]seriesResponse, 0, len(series))
-		for key, value := range series {
-			resp = append(resp, seriesResponse{
-				Name:       key.Name,
-				Attributes: parseFingerprint(key.Attributes),
-				Value:      value,
+		wins, total := store.GetWindows(n, time.Now())
+
+		resp := windowedQueryResponse{
+			Buckets: make([]bucketResponse, 0, len(wins)),
+			Total:   seriesToResponse(total),
+		}
+		for _, win := range wins {
+			resp.Buckets = append(resp.Buckets, bucketResponse{
+				Start:  win.Start,
+				Series: seriesToResponse(win.Series),
 			})
 		}
 
@@ -80,11 +116,24 @@ func QueryHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-// seriesResponse is the JSON shape returned by QueryHandler.
-type seriesResponse struct {
-	Name       string            `json:"name"`
-	Attributes map[string]string `json:"attributes"`
-	Value      float64           `json:"value"`
+// seriesToResponse converts a series map to a stable, sorted slice of
+// seriesResponse for deterministic JSON output.
+func seriesToResponse(series map[SeriesKey]float64) []seriesResponse {
+	result := make([]seriesResponse, 0, len(series))
+	for key, value := range series {
+		result = append(result, seriesResponse{
+			Name:       key.Name,
+			Attributes: parseFingerprint(key.Attributes),
+			Value:      value,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].Attributes[""] < result[j].Attributes[""]
+	})
+	return result
 }
 
 // fingerprintAttrs converts a slice of OTLP KeyValue pairs into a stable,
