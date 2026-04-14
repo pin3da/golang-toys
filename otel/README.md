@@ -1,79 +1,165 @@
 # micro-otel
 
-A minimal OpenTelemetry metrics backend that accepts OTLP/HTTP protobuf payloads
-and aggregates counter values in memory.
+`micro-otel` is a tiny OTLP/HTTP metrics receiver for learning and experiments.
+It accepts OpenTelemetry protobuf payloads, keeps recent values in memory using
+a fixed-size ring buffer, and exposes a simple JSON query endpoint.
 
-## Endpoints
+## What this project is for
 
-| Method | Path        | Description                                  |
-| ------ | ----------- | -------------------------------------------- |
-| POST   | /v1/metrics | Ingest OTLP metrics (application/x-protobuf) |
-| GET    | /metrics    | Query all aggregated series as JSON          |
+- Validate OTLP metric ingestion locally without running a full collector stack.
+- Inspect recent metric windows and per-series totals quickly.
+- Experiment with time-windowed aggregation behavior in a small codebase.
 
-## Run
+It is intentionally minimal and optimized for clarity, not production usage.
 
-In one terminal, start the server:
+## How it works
 
+The server divides time into fixed-width windows (`-window`, default `1m`). Each
+window maps to one slot in a ring buffer of `-buckets` slots (default `10`).
+
+When the current window advances:
+
+1. Slots that fall outside the retention horizon are evicted.
+2. New writes go to the slot for the current epoch.
+3. Queries read up to the most recent N windows and compute a cross-window total.
+
+This guarantees bounded memory: at most `buckets` windows are retained.
+
+## Quick start
+
+### 1) Run the server
+
+```bash
+go run . -window 5s -buckets 10
 ```
-go run .
+
+Server listens on `:4318`.
+
+### 2) Run the example client (second terminal)
+
+```bash
+go run ./cmd/client -sleep 6s
 ```
 
-In a second terminal, run the example client:
+The client sends three rounds of cumulative counter values, sleeping between
+rounds so each round lands in a different window.
 
+### 3) Query the stored windows
+
+```bash
+curl "http://localhost:4318/metrics?windows=3"
 ```
-go run ./cmd/client/main.go
-```
 
-The client sends a batch of counter data points to `POST /v1/metrics`, then
-fetches and prints the aggregated series from `GET /metrics`.
+## API
 
----
+### `POST /v1/metrics`
 
-## Plan
+Ingests OTLP protobuf metrics.
 
-### Main exercise: OTLP counter backend
+- `Content-Type`: `application/x-protobuf`
+- Body: `ExportMetricsServiceRequest`
+- Status:
+  - `200 OK` on success
+  - `400 Bad Request` if the body cannot be read or decoded
 
-**Milestone 1 — Skeleton**
-Define all public types, method signatures, and route wiring. Method bodies
-panic with "not implemented". One test covers the `Store` contract.
+Notes:
 
-**Milestone 2 — Ingest**
-`POST /v1/metrics` parses the protobuf body, extracts `Sum` data points
-(counters), and records the latest value per series in the `Store`.
+- Only `Metric_Sum` datapoints are ingested.
+- Non-sum metric types are ignored.
+- Values are stored as the latest datapoint value per `(metric name + attributes)`
+  within each window.
 
-A series is uniquely identified by `(metric_name, attributes)`. Attributes are
-fingerprinted as a sorted `key=value,...` string so they can serve as a map key.
+### `GET /metrics`
 
-**Milestone 3 — Query**
-`GET /metrics` returns all series as JSON:
+Returns JSON with per-window series and a rolled-up total.
+
+Query parameter:
+
+- `windows` (optional): positive integer limiting how many recent windows are
+  returned. If omitted, all retained windows are considered.
+
+Status:
+
+- `200 OK` on success
+- `400 Bad Request` if `windows` is not a positive integer
+
+Response shape:
 
 ```json
-[
-  {
-    "name": "http.server.request.duration",
-    "attributes": { "http.method": "GET", "http.status_code": "200" },
-    "value": 10482
-  }
-]
+{
+  "buckets": [
+    {
+      "start": "2026-04-14T10:00:00Z",
+      "series": [
+        {
+          "name": "http.server.request.count",
+          "attributes": {
+            "http.method": "GET",
+            "http.status_code": "200"
+          },
+          "value": 1024
+        }
+      ]
+    }
+  ],
+  "total": [
+    {
+      "name": "http.server.request.count",
+      "attributes": {
+        "http.method": "GET",
+        "http.status_code": "200"
+      },
+      "value": 1024
+    }
+  ]
+}
 ```
 
-**Milestone 4 — Wire up + example client**
-`cmd/client/main.go` generates sample metrics, posts them as an
-`ExportMetricsServiceRequest` to the running server, then hits `GET /metrics`
-and prints the result.
+Semantics:
 
----
+- `buckets`: oldest-first, non-empty windows only.
+- `total`: sum per series across all returned buckets.
 
-### Sub-exercise: time-windowed ring buffer
+## Configuration
 
-Replace the flat `Store` with per-minute (configurable) buckets. Goals:
+### Server flags
 
-- **Ring buffer**: fixed-size array of `N` buckets; new arrivals write to the
-  current bucket without allocating.
-- **Bucket rotation**: on each ingest, compute the current bucket index from
-  `now / windowSize`. If the index has advanced since the last write, zero out
-  stale buckets before writing.
-- **Partial-window handling**: the current (open) bucket is incomplete. Decide
-  whether to expose it as-is or exclude it from aggregated queries.
-- **Query**: `GET /metrics?windows=5` returns per-bucket values for the last 5
-  windows plus a rolled-up total.
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-window` | `1m` | Duration of each time window |
+| `-buckets` | `10` | Number of windows retained in memory |
+
+### Client flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-sleep` | `5s` | Delay between rounds; set greater than server `-window` to force separate windows |
+
+## Development
+
+Run tests:
+
+```bash
+go test ./...
+```
+
+Build binaries:
+
+```bash
+go build -o micro-otel .
+go build -o client ./cmd/client
+```
+
+## Current limitations
+
+- In-memory only (no persistence across restarts).
+- Single process, no distributed coordination.
+- Focused on basic counter-style `Sum` ingestion.
+- No authentication, authorization, or rate limiting.
+
+## Repository layout
+
+- `main.go`: server entrypoint and HTTP route wiring
+- `handler.go`: OTLP ingest + JSON query handlers
+- `store.go`: windowed ring-buffer storage implementation
+- `cmd/client/main.go`: example OTLP producer and query printer
