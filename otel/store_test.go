@@ -205,3 +205,72 @@ func TestWindowedStore_ConcurrentReadsAndWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestNewWindowedStore_PanicsOnInvalidArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		buckets  int
+		duration time.Duration
+	}{
+		{"zero buckets", 0, time.Minute},
+		{"negative buckets", -1, time.Minute},
+		{"zero duration", 1, 0},
+		{"negative duration", 1, -time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("expected panic, got none")
+				}
+			}()
+			NewWindowedStore(tc.buckets, tc.duration)
+		})
+	}
+}
+
+func TestWindowedStore_SingleBucketEviction(t *testing.T) {
+	store := NewWindowedStore(1, time.Minute)
+	key := SeriesKey{Name: "x", Attributes: ""}
+
+	store.Set(key, 1, t0)
+	store.Set(key, 2, t0.Add(time.Minute)) // writing to a new epoch evicts the only slot
+
+	windows, total := store.GetWindows(1, t0.Add(time.Minute))
+	if len(windows) != 1 {
+		t.Fatalf("got %d windows, want 1", len(windows))
+	}
+	if got := total[key]; got != 2 {
+		t.Errorf("total = %v, want 2", got)
+	}
+}
+
+func TestWindowedStore_LargeGapEvictsAll(t *testing.T) {
+	store := NewWindowedStore(3, time.Minute)
+	key := SeriesKey{Name: "x", Attributes: ""}
+
+	store.Set(key, 1, t0)
+	store.Set(key, 2, t0.Add(10*time.Minute)) // gap >> numBuckets
+
+	windows, total := store.GetWindows(3, t0.Add(10*time.Minute))
+	for _, w := range windows {
+		if v, ok := w.Series[key]; ok && v == 1 {
+			t.Errorf("stale value 1 survived large eviction gap at %v", w.Start)
+		}
+	}
+	if got := total[key]; got != 2 {
+		t.Errorf("total = %v, want 2 (new value must be present)", got)
+	}
+}
+
+func TestWindowedStore_GetWindowsZero(t *testing.T) {
+	store := NewWindowedStore(5, time.Minute)
+	store.Set(SeriesKey{Name: "x", Attributes: ""}, 1, t0)
+
+	windows, total := store.GetWindows(0, t0)
+	if len(windows) != 0 {
+		t.Errorf("GetWindows(0) = %d windows, want 0", len(windows))
+	}
+	if len(total) != 0 {
+		t.Errorf("GetWindows(0) total has %d entries, want 0", len(total))
+	}
+}
