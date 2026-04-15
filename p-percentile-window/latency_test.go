@@ -1,6 +1,7 @@
 package latency
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -98,8 +99,8 @@ func TestWindowPercentileDuplicates(t *testing.T) {
 
 func BenchmarkWindowPercentile(b *testing.B) {
 	benchCases := []struct {
-		name    string
-		records int
+		name  string
+		total int
 	}{
 		{"100", 100},
 		{"1000", 1000},
@@ -117,24 +118,48 @@ func BenchmarkWindowPercentile(b *testing.B) {
 		}},
 	}
 
+	percentiles := []float64{0.5, 0.9, 0.95, 0.99, 0.999}
+
 	for _, bc := range benchCases {
 		b.Run(bc.name, func(b *testing.B) {
 			for _, impl := range implementations {
 				b.Run(impl.name, func(b *testing.B) {
-					wp := impl.new()
-					baseTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+					rng := rand.New(rand.NewSource(42))
 
-					for i := 0; i < bc.records; i++ {
-						wp.Record(Observation{
-							Timestamp: baseTime.Add(time.Duration(i) * time.Millisecond),
-							Latency:   time.Duration(i%1000) * time.Microsecond,
-						})
+					type op struct {
+						record bool
+						p      float64
+						obs    Observation
+					}
+					ops := make([]op, bc.total)
+					baseTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+					for i := 0; i < bc.total; i++ {
+						if rng.Float64() < 0.7 {
+							ops[i] = op{
+								record: true,
+								obs: Observation{
+									Timestamp: baseTime.Add(time.Duration(i) * time.Millisecond),
+									Latency:   time.Duration(rng.Intn(1000)) * time.Microsecond,
+								},
+							}
+						} else {
+							ops[i] = op{
+								record: false,
+								p:      percentiles[rng.Intn(len(percentiles))],
+							}
+						}
 					}
 
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						now := baseTime.Add(time.Duration(bc.records+i) * time.Millisecond)
-						wp.Percentile(0.99, now)
+						wp := impl.new()
+						for j := 0; j < bc.total; j++ {
+							if ops[j].record {
+								wp.Record(ops[j].obs)
+							} else {
+								wp.Percentile(ops[j].p, ops[j].obs.Timestamp)
+							}
+						}
 					}
 				})
 			}
