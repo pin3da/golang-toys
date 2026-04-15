@@ -12,6 +12,7 @@ func TestWindowPercentile(t *testing.T) {
 	}{
 		{"Naive", NewNaiveWindowPercentile(100 * time.Millisecond)},
 		{"Treap", NewTreapWindowPercentile(100 * time.Millisecond)},
+		{"Histogram", NewHistogramWindowPercentile(100*time.Millisecond, time.Millisecond, 100*time.Millisecond)},
 	}
 
 	baseTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -57,6 +58,7 @@ func TestWindowPercentileDuplicates(t *testing.T) {
 	}{
 		{"Naive", NewNaiveWindowPercentile(100 * time.Millisecond)},
 		{"Treap", NewTreapWindowPercentile(100 * time.Millisecond)},
+		{"Histogram", NewHistogramWindowPercentile(100*time.Millisecond, time.Millisecond, 100*time.Millisecond)},
 	}
 
 	baseTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -110,6 +112,9 @@ func BenchmarkWindowPercentile(b *testing.B) {
 	}{
 		{"Naive", func() WindowPercentile { return NewNaiveWindowPercentile(time.Minute) }},
 		{"Treap", func() WindowPercentile { return NewTreapWindowPercentile(time.Minute) }},
+		{"Histogram", func() WindowPercentile {
+			return NewHistogramWindowPercentile(time.Minute, time.Microsecond, 2*time.Millisecond)
+		}},
 	}
 
 	for _, bc := range benchCases {
