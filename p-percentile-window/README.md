@@ -35,7 +35,7 @@ type WindowPercentile interface {
 ## Candidate Algorithms
 
 - [x] **Naive Sorted Slice**: Copy and sort on every query. Baseline.
-- [ ] **Order Statistic Tree**: Logarithmic insertion and percentile lookup.
+- [x] **Order Statistic Tree**: Logarithmic insertion and percentile lookup.
 - [ ] **Fixed-Bin Histogram**: Fast $O(1)$ constant-space approximation.
 - [ ] **T-Digest / GK Array**: Advanced streaming approximations.
 - [ ] DDSketch: From https://arxiv.org/pdf/1908.10693
