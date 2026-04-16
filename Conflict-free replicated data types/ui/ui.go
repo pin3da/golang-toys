@@ -5,6 +5,7 @@ package ui
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -16,20 +17,32 @@ import (
 // not block.
 type BroadcastFunc func(op crdt.Op)
 
+// remoteOpEvent carries a peer op from a network goroutine into the UI event
+// loop, where it is applied to the local RGA. This keeps every RGA mutation
+// on the UI goroutine so no locking is required.
+type remoteOpEvent struct {
+	t  time.Time
+	op crdt.Op
+}
+
+// When implements [tcell.Event].
+func (e *remoteOpEvent) When() time.Time { return e.t }
+
 // activeScreen holds the screen owned by the currently running [Start], or
-// nil otherwise. Accessed by [PostRefresh] from arbitrary goroutines.
+// nil otherwise. Accessed by [PostRemoteOp] from arbitrary goroutines.
 var activeScreen atomic.Pointer[tcell.Screen]
 
 // Start runs the tcell event loop until the user hits Ctrl-C or the screen
 // errors out. It takes ownership of stdin/stdout drawing.
 //
-// rga is the shared document; Start mutates it on local key events and reads
-// it on every repaint. clientID is stamped into every locally minted NodeID.
-// broadcast is invoked after each local mutation; pass a no-op to run offline.
+// rga is the shared document; Start mutates it on local key events and on
+// remote ops delivered via [PostRemoteOp]. clientID is stamped into every
+// locally minted NodeID. broadcast is invoked after each local mutation;
+// pass a no-op to run offline.
 //
-// Not safe for concurrent use; call once from the main goroutine. Remote ops
-// applied by other goroutines must trigger a repaint via [PostRefresh] and
-// serialize their own RGA access against the UI goroutine.
+// Not safe for concurrent use; call once from the main goroutine. Peer
+// goroutines must route remote ops through [PostRemoteOp], not touch rga
+// directly.
 func Start(rga *crdt.RGA, clientID string, broadcast BroadcastFunc) error {
 	screen, err := tcell.NewScreen()
 	if err != nil {
@@ -52,8 +65,8 @@ func Start(rga *crdt.RGA, clientID string, broadcast BroadcastFunc) error {
 		switch ev := screen.PollEvent().(type) {
 		case *tcell.EventResize:
 			screen.Sync()
-		case *tcell.EventInterrupt:
-			// Posted by PostRefresh; just redraw.
+		case *remoteOpEvent:
+			applyRemote(rga, ev.op)
 		case *tcell.EventKey:
 			if ev.Key() == tcell.KeyCtrlC {
 				return nil
@@ -64,14 +77,26 @@ func Start(rga *crdt.RGA, clientID string, broadcast BroadcastFunc) error {
 	}
 }
 
-// PostRefresh asks the running UI to repaint. Safe to call from any goroutine;
-// a no-op if [Start] has not been called or has already returned.
-func PostRefresh() {
+// PostRemoteOp queues op for application on the UI goroutine. Safe to call
+// from any goroutine; a no-op if [Start] has not been called or has already
+// returned.
+func PostRemoteOp(op crdt.Op) {
 	sp := activeScreen.Load()
 	if sp == nil {
 		return
 	}
-	(*sp).PostEvent(tcell.NewEventInterrupt(nil))
+	(*sp).PostEvent(&remoteOpEvent{t: time.Now(), op: op})
+}
+
+// applyRemote replays op against rga. Unknown actions are ignored; the
+// underlying [crdt.RGA] methods are already idempotent.
+func applyRemote(rga *crdt.RGA, op crdt.Op) {
+	switch op.Action {
+	case crdt.OpInsert:
+		rga.RemoteInsert(op.PrevID, op.Node)
+	case crdt.OpDelete:
+		rga.Delete(op.Node.ID)
+	}
 }
 
 // handleKey applies the local mutation implied by (key, r) and returns the

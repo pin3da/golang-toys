@@ -269,6 +269,23 @@ func TestHandleKey_DownThroughEmptyLine(t *testing.T) {
 	}
 }
 
+func TestApplyRemote_InsertThenDelete(t *testing.T) {
+	r := crdt.NewRGA()
+	id := crdt.NodeID{Timestamp: 1, ClientID: "peer"}
+	applyRemote(r, crdt.Op{
+		Action: crdt.OpInsert,
+		PrevID: crdt.NodeID{},
+		Node:   crdt.Node{ID: id, Char: 'z'},
+	})
+	if diff := cmp.Diff([]rune("z"), r.Values()); diff != "" {
+		t.Errorf("after remote insert (-want +got):\n%s", diff)
+	}
+	applyRemote(r, crdt.Op{Action: crdt.OpDelete, Node: crdt.Node{ID: id}})
+	if diff := cmp.Diff([]rune{}, r.Values()); diff != "" {
+		t.Errorf("after remote delete (-want +got):\n%s", diff)
+	}
+}
+
 func TestHandleKey_UnknownKeyIsNoop(t *testing.T) {
 	r, ids := seed(t, "a")
 	calls := 0
