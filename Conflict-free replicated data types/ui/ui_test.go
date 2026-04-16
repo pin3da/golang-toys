@@ -149,6 +149,126 @@ func TestHandleKey_ArrowNavigation(t *testing.T) {
 	}
 }
 
+func TestHandleKey_EnterInsertsNewline(t *testing.T) {
+	r, ids := seed(t, "ab")
+	var got []crdt.Op
+	broadcast := func(op crdt.Op) { got = append(got, op) }
+
+	cursor := handleKey(tcell.KeyEnter, 0, r, "T", broadcast, ids[1])
+
+	if diff := cmp.Diff([]rune("ab\n"), r.Values()); diff != "" {
+		t.Errorf("Values mismatch (-want +got):\n%s", diff)
+	}
+	visible := r.VisibleNodes()
+	if visible[2].ID != cursor || visible[2].Char != '\n' {
+		t.Errorf("cursor = %v, want new '\\n' id %v", cursor, visible[2].ID)
+	}
+	if len(got) != 1 || got[0].Action != crdt.OpInsert || got[0].Node.Char != '\n' {
+		t.Errorf("broadcast mismatch: got %+v", got)
+	}
+}
+
+// posOf finds the NodeID of the i-th visible rune (0-indexed). Useful for
+// addressing nodes in a multi-line buffer without plumbing ids out of seed.
+func posOf(r *crdt.RGA, i int) crdt.NodeID {
+	return r.VisibleNodes()[i].ID
+}
+
+func TestHandleKey_DownPreservesColumnWhenFits(t *testing.T) {
+	// "abc\ndefgh"; cursor after 'b' (line 0, col 2). Down -> line 1, col 2
+	// which is after 'e'.
+	r, _ := seed(t, "abc\ndefgh")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 1) // 'b'
+	want := posOf(r, 5)  // 'e' (index 0:'a' 1:'b' 2:'c' 3:'\n' 4:'d' 5:'e')
+
+	got := handleKey(tcell.KeyDown, 0, r, "T", broadcast, start)
+	if got != want {
+		t.Errorf("Down cursor = %v, want %v", got, want)
+	}
+}
+
+func TestHandleKey_DownClampsToShorterLine(t *testing.T) {
+	// "abcde\nxy"; cursor after 'd' (line 0, col 4). Down -> line 1 end
+	// (after 'y', col 2).
+	r, _ := seed(t, "abcde\nxy")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 3) // 'd'
+	want := posOf(r, 7)  // 'y' (0:'a'1:'b'2:'c'3:'d'4:'e'5:'\n'6:'x'7:'y')
+
+	got := handleKey(tcell.KeyDown, 0, r, "T", broadcast, start)
+	if got != want {
+		t.Errorf("Down cursor = %v, want %v", got, want)
+	}
+}
+
+func TestHandleKey_UpPreservesColumn(t *testing.T) {
+	// "abcd\nwxyz"; cursor after 'y' (line 1, col 3). Up -> line 0 col 3
+	// which is after 'c'.
+	r, _ := seed(t, "abcd\nwxyz")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 7) // 'y'
+	want := posOf(r, 2)  // 'c'
+
+	got := handleKey(tcell.KeyUp, 0, r, "T", broadcast, start)
+	if got != want {
+		t.Errorf("Up cursor = %v, want %v", got, want)
+	}
+}
+
+func TestHandleKey_UpAtTopStays(t *testing.T) {
+	r, ids := seed(t, "abc")
+	broadcast := func(crdt.Op) {}
+
+	got := handleKey(tcell.KeyUp, 0, r, "T", broadcast, ids[1])
+	if got != ids[1] {
+		t.Errorf("Up at top = %v, want unchanged %v", got, ids[1])
+	}
+}
+
+func TestHandleKey_DownAtBottomStays(t *testing.T) {
+	r, _ := seed(t, "ab\ncd")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 4) // 'd'
+	got := handleKey(tcell.KeyDown, 0, r, "T", broadcast, start)
+	if got != start {
+		t.Errorf("Down at bottom = %v, want unchanged %v", got, start)
+	}
+}
+
+func TestHandleKey_UpToStartOfLine0(t *testing.T) {
+	// "ab\ncd"; cursor at start of line 1 (after '\n'). Up with col 0 on
+	// line 0 has no node at col <= 0, so cursor must collapse to zero.
+	r, _ := seed(t, "ab\ncd")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 2) // '\n'; cursor after '\n' is (line 1, col 0)
+
+	got := handleKey(tcell.KeyUp, 0, r, "T", broadcast, start)
+	if got != (crdt.NodeID{}) {
+		t.Errorf("Up to col 0 of line 0 = %v, want zero NodeID", got)
+	}
+}
+
+func TestHandleKey_DownThroughEmptyLine(t *testing.T) {
+	// "ab\n\ncd"; cursor after 'b' (line 0, col 2). Down -> line 1 col 0
+	// (the first '\n', which anchors the cursor at start of line 1).
+	r, _ := seed(t, "ab\n\ncd")
+	broadcast := func(crdt.Op) {}
+
+	start := posOf(r, 1) // 'b'
+	want := posOf(r, 2)  // first '\n'; anchor here is (line 1, col 0)
+
+	got := handleKey(tcell.KeyDown, 0, r, "T", broadcast, start)
+	if got != want {
+		t.Errorf("Down onto empty line = %v, want %v", got, want)
+	}
+}
+
 func TestHandleKey_UnknownKeyIsNoop(t *testing.T) {
 	r, ids := seed(t, "a")
 	calls := 0

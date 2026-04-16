@@ -83,6 +83,10 @@ func handleKey(key tcell.Key, r rune, rga *crdt.RGA, clientID string, broadcast 
 		return prevVisible(rga, cursor)
 	case tcell.KeyRight:
 		return nextVisible(rga, cursor)
+	case tcell.KeyUp:
+		return moveByLine(rga, cursor, -1)
+	case tcell.KeyDown:
+		return moveByLine(rga, cursor, +1)
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if cursor == (crdt.NodeID{}) {
 			return cursor
@@ -92,16 +96,24 @@ func handleKey(key tcell.Key, r rune, rga *crdt.RGA, clientID string, broadcast 
 		rga.Delete(deleted)
 		broadcast(crdt.Op{Action: crdt.OpDelete, Node: crdt.Node{ID: deleted}})
 		return newCursor
+	case tcell.KeyEnter:
+		return insertRune(rga, clientID, broadcast, cursor, '\n')
 	case tcell.KeyRune:
-		id := rga.Insert(cursor, r, clientID)
-		broadcast(crdt.Op{
-			Action: crdt.OpInsert,
-			PrevID: cursor,
-			Node:   crdt.Node{ID: id, Char: r},
-		})
-		return id
+		return insertRune(rga, clientID, broadcast, cursor, r)
 	}
 	return cursor
+}
+
+// insertRune inserts r after cursor, broadcasts the op, and returns the new
+// anchor (the id of the freshly inserted node).
+func insertRune(rga *crdt.RGA, clientID string, broadcast BroadcastFunc, cursor crdt.NodeID, r rune) crdt.NodeID {
+	id := rga.Insert(cursor, r, clientID)
+	broadcast(crdt.Op{
+		Action: crdt.OpInsert,
+		PrevID: cursor,
+		Node:   crdt.Node{ID: id, Char: r},
+	})
+	return id
 }
 
 // prevVisible returns the NodeID of the visible node immediately before
@@ -142,26 +154,108 @@ func nextVisible(rga *crdt.RGA, cursor crdt.NodeID) crdt.NodeID {
 	return cursor
 }
 
-// draw renders the document on row 0 and places the terminal cursor one cell
-// past the anchor node. Content past the terminal width is clipped.
+// logicalPos is the (line, column) where the cursor sits when anchored to a
+// given node. Lines are split on '\n' runes; column is the count of non-\n
+// runes on the line preceding the cursor.
+type logicalPos struct{ line, col int }
+
+// layout computes the logical cursor position for every visible node. The
+// returned slice is parallel to visible: positions[i] is where the cursor
+// lands when anchored to visible[i].
+func layout(visible []crdt.Node) []logicalPos {
+	out := make([]logicalPos, len(visible))
+	line, col := 0, 0
+	for i, n := range visible {
+		if n.Char == '\n' {
+			line++
+			col = 0
+		} else {
+			col++
+		}
+		out[i] = logicalPos{line, col}
+	}
+	return out
+}
+
+// currentPos returns the logical position of cursor. The zero NodeID maps to
+// the start of the document. An unknown cursor (tombstoned out of view) also
+// maps to the start.
+func currentPos(visible []crdt.Node, positions []logicalPos, cursor crdt.NodeID) logicalPos {
+	if cursor == (crdt.NodeID{}) {
+		return logicalPos{0, 0}
+	}
+	for i, n := range visible {
+		if n.ID == cursor {
+			return positions[i]
+		}
+	}
+	return logicalPos{0, 0}
+}
+
+// moveByLine returns the anchor for moving the cursor delta lines (negative
+// for up, positive for down) while staying as close to the current column as
+// the target line allows. Returns cursor unchanged if the target line does
+// not exist.
+func moveByLine(rga *crdt.RGA, cursor crdt.NodeID, delta int) crdt.NodeID {
+	visible := rga.VisibleNodes()
+	positions := layout(visible)
+	cur := currentPos(visible, positions, cursor)
+	target := cur.line + delta
+	if target < 0 {
+		return cursor
+	}
+
+	bestIdx := -1
+	bestCol := -1
+	targetExists := false
+	for i, p := range positions {
+		if p.line != target {
+			continue
+		}
+		targetExists = true
+		if p.col <= cur.col && p.col > bestCol {
+			bestCol = p.col
+			bestIdx = i
+		}
+	}
+	if !targetExists {
+		return cursor
+	}
+	if bestIdx < 0 {
+		// Target line exists but every node on it has col > cur.col, which
+		// can only happen for line 0 (no preceding \n seeds a col=0 anchor).
+		return crdt.NodeID{}
+	}
+	return visible[bestIdx].ID
+}
+
+// draw renders the document starting at row 0 and places the terminal cursor
+// immediately after the anchor node. Newline runes advance to the next row;
+// content past the terminal width is clipped on its row.
 func draw(screen tcell.Screen, rga *crdt.RGA, cursor crdt.NodeID) {
 	screen.Clear()
 	width, _ := screen.Size()
 	visible := rga.VisibleNodes()
 
-	cursorX := 0
-	for i, n := range visible {
-		if i >= width {
-			break
+	x, y := 0, 0
+	cursorX, cursorY := 0, 0
+	for _, n := range visible {
+		if n.Char == '\n' {
+			y++
+			x = 0
+		} else {
+			if x < width {
+				screen.SetContent(x, y, n.Char, nil, tcell.StyleDefault)
+			}
+			x++
 		}
-		screen.SetContent(i, 0, n.Char, nil, tcell.StyleDefault)
 		if n.ID == cursor {
-			cursorX = i + 1
+			cursorX, cursorY = x, y
 		}
 	}
 	if cursorX > width {
 		cursorX = width
 	}
-	screen.ShowCursor(cursorX, 0)
+	screen.ShowCursor(cursorX, cursorY)
 	screen.Show()
 }
