@@ -80,6 +80,24 @@ func TestRemoteInsert_ConcurrentSiblings(t *testing.T) {
 	}
 }
 
+func TestVisibleNodes_SkipsTombstones(t *testing.T) {
+	r := NewRGA()
+	prev := NodeID{}
+	var ids []NodeID
+	for _, c := range "abc" {
+		prev = r.Insert(prev, c, "A")
+		ids = append(ids, prev)
+	}
+	r.Delete(ids[1]) // tombstone 'b'
+	got := r.VisibleNodes()
+	if len(got) != 2 || got[0].Char != 'a' || got[1].Char != 'c' {
+		t.Fatalf("VisibleNodes = %+v, want [a c]", got)
+	}
+	if got[0].ID != ids[0] || got[1].ID != ids[2] {
+		t.Errorf("VisibleNodes IDs mismatch: got %v, want [%v %v]", []NodeID{got[0].ID, got[1].ID}, ids[0], ids[2])
+	}
+}
+
 func TestRemoteInsert_Idempotent(t *testing.T) {
 	r := NewRGA()
 	n := Node{ID: NodeID{Timestamp: 5, ClientID: "X"}, Char: 'x'}

@@ -1,24 +1,20 @@
 package main
 
 import (
-	"flag"
+	"log"
+
+	"github.com/google/uuid"
 
 	"crdt-practice/crdt"
-	"crdt-practice/server"
 	"crdt-practice/ui"
 )
 
 func main() {
-	bind := flag.String("bind", "tcp://*:8080", "")
-	peer := flag.String("peer", "", "")
-	flag.Parse()
-
+	clientID := uuid.NewString()
 	rga := crdt.NewRGA()
 
-	_ = bind
-	_ = peer
-	_ = rga
-
-	server.Start(*bind, *peer, rga)
-	ui.Start(rga)
+	broadcast := func(crdt.Op) {} // TODO: wire to server.Broadcast
+	if err := ui.Start(rga, clientID, broadcast); err != nil {
+		log.Fatal(err)
+	}
 }

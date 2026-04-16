@@ -136,3 +136,17 @@ func (r *RGA) Values() []rune {
 	}
 	return out
 }
+
+// VisibleNodes returns the non-tombstoned nodes in document order. The
+// returned slice is a fresh copy; callers may modify it freely. Intended for
+// front ends that need to address nodes by NodeID (e.g. cursor anchors).
+func (r *RGA) VisibleNodes() []Node {
+	out := make([]Node, 0, len(r.index)-1)
+	for e := r.root.next; e != nil; e = e.next {
+		if e.node.Tombstone {
+			continue
+		}
+		out = append(out, e.node)
+	}
+	return out
+}
