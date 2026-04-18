@@ -47,73 +47,44 @@ func factories() []limiterFactory {
 	}
 }
 
-// BenchmarkAllowSingleKey measures hot-path cost with zero key churn: every
-// call hits the same bucket, so it exposes per-call overhead (lock + map
-// lookup + counter update) without map-growth noise.
-func BenchmarkAllowSingleKey(b *testing.B) {
+// scenario describes a benchmark workload. Each scenario runs once per
+// limiter factory; sub-benchmarks are named scenario=X/algo=Y so tools
+// like benchstat can pivot the results.
+type scenario struct {
+	name string
+	run  func(b *testing.B, l ratelimiter.Limiter)
+}
+
+func scenarios() []scenario {
 	now := time.Unix(100, 0)
-	for _, f := range factories() {
-		b.Run(f.name, func(b *testing.B) {
-			l := f.make()
-			b.ReportAllocs()
-			b.ResetTimer()
+	keys := randomKeys(keyPoolSize)
+	return []scenario{
+		// single_key: hot path with zero key churn; measures lock + map
+		// lookup + counter update.
+		{"single_key", func(b *testing.B, l ratelimiter.Limiter) {
 			for range b.N {
 				l.Allow("k", now)
 			}
-		})
-	}
-}
-
-// BenchmarkAllowManyKeys measures behavior under key churn: calls cycle
-// through a pre-generated pool of random keys, so the map grows and the
-// access pattern reflects realistic hash distribution rather than the
-// dense/sequential layout of strconv.Itoa(i).
-func BenchmarkAllowManyKeys(b *testing.B) {
-	now := time.Unix(100, 0)
-	keys := randomKeys(keyPoolSize)
-	for _, f := range factories() {
-		b.Run(f.name, func(b *testing.B) {
-			l := f.make()
-			b.ReportAllocs()
-			b.ResetTimer()
+		}},
+		// many_keys: cycles through a random key pool; exposes map-growth
+		// and per-key allocation cost.
+		{"many_keys", func(b *testing.B, l ratelimiter.Limiter) {
 			for i := range b.N {
 				l.Allow(keys[i%len(keys)], now)
 			}
-		})
-	}
-}
-
-// BenchmarkAllowParallelSingleKey measures contention: many goroutines
-// hammer the same key, exercising the mutex. Worst case for a single
-// global lock.
-func BenchmarkAllowParallelSingleKey(b *testing.B) {
-	now := time.Unix(100, 0)
-	for _, f := range factories() {
-		b.Run(f.name, func(b *testing.B) {
-			l := f.make()
-			b.ReportAllocs()
-			b.ResetTimer()
+		}},
+		// parallel_single_key: worst case for a single global mutex --
+		// every goroutine contends on the same key.
+		{"parallel_single_key", func(b *testing.B, l ratelimiter.Limiter) {
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
 					l.Allow("k", now)
 				}
 			})
-		})
-	}
-}
-
-// BenchmarkAllowParallelManyKeys measures realistic concurrent load: many
-// goroutines each cycle through the shared random key pool. Each goroutine
-// uses a local counter so there is no synchronization on key selection;
-// contention comes only from the limiter itself.
-func BenchmarkAllowParallelManyKeys(b *testing.B) {
-	now := time.Unix(100, 0)
-	keys := randomKeys(keyPoolSize)
-	for _, f := range factories() {
-		b.Run(f.name, func(b *testing.B) {
-			l := f.make()
-			b.ReportAllocs()
-			b.ResetTimer()
+		}},
+		// parallel_many_keys: realistic concurrent load -- many goroutines,
+		// many keys, contention comes only from the limiter itself.
+		{"parallel_many_keys", func(b *testing.B, l ratelimiter.Limiter) {
 			b.RunParallel(func(pb *testing.PB) {
 				i := 0
 				for pb.Next() {
@@ -121,6 +92,24 @@ func BenchmarkAllowParallelManyKeys(b *testing.B) {
 					i++
 				}
 			})
+		}},
+	}
+}
+
+// BenchmarkAllow runs every scenario against every registered algorithm.
+// Sub-benchmark names use key=value labels so benchstat can pivot by
+// scenario or algorithm.
+func BenchmarkAllow(b *testing.B) {
+	for _, s := range scenarios() {
+		b.Run("scenario="+s.name, func(b *testing.B) {
+			for _, f := range factories() {
+				b.Run("algo="+f.name, func(b *testing.B) {
+					l := f.make()
+					b.ReportAllocs()
+					b.ResetTimer()
+					s.run(b, l)
+				})
+			}
 		})
 	}
 }
