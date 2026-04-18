@@ -8,6 +8,7 @@ import (
 
 	ratelimiter "github.com/pin3da/golang-toys/rate-limiter"
 	"github.com/pin3da/golang-toys/rate-limiter/fixedwindow"
+	"github.com/pin3da/golang-toys/rate-limiter/slidinglog"
 )
 
 // randomKeys returns n pseudo-random hex strings drawn from a fixed seed so
@@ -35,6 +36,9 @@ func factories() []limiterFactory {
 	return []limiterFactory{
 		{"fixed_window", func() ratelimiter.Limiter {
 			return fixedwindow.New(1_000_000, time.Second)
+		}},
+		{"sliding_log", func() ratelimiter.Limiter {
+			return slidinglog.New(1_000_000, time.Second)
 		}},
 	}
 }
