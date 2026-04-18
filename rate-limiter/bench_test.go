@@ -8,8 +8,10 @@ import (
 
 	ratelimiter "github.com/pin3da/golang-toys/rate-limiter"
 	"github.com/pin3da/golang-toys/rate-limiter/fixedwindow"
+	"github.com/pin3da/golang-toys/rate-limiter/leakybucket"
 	"github.com/pin3da/golang-toys/rate-limiter/slidinglog"
 	"github.com/pin3da/golang-toys/rate-limiter/slidingwindow"
+	"github.com/pin3da/golang-toys/rate-limiter/tokenbucket"
 )
 
 // randomKeys returns n pseudo-random hex strings drawn from a fixed seed so
@@ -43,6 +45,12 @@ func factories() []limiterFactory {
 		}},
 		{"sliding_window", func() ratelimiter.Limiter {
 			return slidingwindow.New(1_000_000, time.Second)
+		}},
+		{"token_bucket", func() ratelimiter.Limiter {
+			return tokenbucket.New(1_000_000, 1_000_000)
+		}},
+		{"leaky_bucket", func() ratelimiter.Limiter {
+			return leakybucket.New(1_000_000, 1_000_000)
 		}},
 	}
 }
