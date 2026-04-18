@@ -5,7 +5,7 @@
 // sliding interval (now-window, now] by weighting the previous counter by
 // the fraction of the previous window that still overlaps the interval:
 //
-//   estimate = prev * (1 - elapsed/window) + curr
+//	estimate = prev * (1 - elapsed/window) + curr
 //
 // where elapsed = now - currentWindowStart. The approximation assumes
 // requests are distributed uniformly within the previous window; in

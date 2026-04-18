@@ -51,7 +51,6 @@ func (l *Limiter) Allow(key string, now time.Time) bool {
 		b = bucket{windowStart: start}
 	}
 	if b.count >= l.limit {
-		l.buckets[key] = b
 		return false
 	}
 	b.count++

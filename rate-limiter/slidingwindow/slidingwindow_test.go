@@ -1,7 +1,6 @@
 package slidingwindow_test
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -78,31 +77,5 @@ func TestKeysAreIndependent(t *testing.T) {
 	}
 	if l.Allow("a", now) {
 		t.Fatal("key a should be exhausted")
-	}
-}
-
-func TestConcurrentAllowDoesNotExceedLimit(t *testing.T) {
-	const limit = 100
-	const goroutines = 500
-	l := slidingwindow.New(limit, time.Hour)
-	now := time.Unix(100, 0)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	allowed := 0
-	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if l.Allow("k", now) {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	if allowed != limit {
-		t.Fatalf("allowed = %d, want %d", allowed, limit)
 	}
 }

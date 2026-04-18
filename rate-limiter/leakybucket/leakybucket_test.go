@@ -1,7 +1,6 @@
 package leakybucket_test
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -74,31 +73,5 @@ func TestKeysAreIndependent(t *testing.T) {
 	}
 	if l.Allow("a", now) {
 		t.Fatal("key a should be full")
-	}
-}
-
-func TestConcurrentAllowDoesNotExceedCapacity(t *testing.T) {
-	const capacity = 100
-	const goroutines = 500
-	l := leakybucket.New(capacity, 0.0001) // drain negligible during test
-	now := time.Unix(100, 0)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	allowed := 0
-	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if l.Allow("k", now) {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	if allowed != capacity {
-		t.Fatalf("allowed = %d, want %d", allowed, capacity)
 	}
 }

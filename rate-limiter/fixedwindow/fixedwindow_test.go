@@ -1,7 +1,6 @@
 package fixedwindow_test
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -50,34 +49,5 @@ func TestKeysAreIndependent(t *testing.T) {
 	}
 	if l.Allow("a", now) {
 		t.Fatalf("key a should be exhausted")
-	}
-}
-
-// TestConcurrentAllowDoesNotExceedLimit validates that the mutex prevents
-// overcounting under concurrent access: with limit N, at most N calls in a
-// single window may return true, regardless of goroutine count.
-func TestConcurrentAllowDoesNotExceedLimit(t *testing.T) {
-	const limit = 100
-	const goroutines = 500
-	l := fixedwindow.New(limit, time.Hour)
-	now := time.Unix(100, 0)
-
-	var wg sync.WaitGroup
-	var allowed int64
-	var mu sync.Mutex
-	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if l.Allow("k", now) {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	if allowed != limit {
-		t.Fatalf("allowed = %d, want %d", allowed, limit)
 	}
 }

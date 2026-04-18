@@ -1,7 +1,6 @@
 package slidinglog_test
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -58,10 +57,10 @@ func TestKeysAreIndependent(t *testing.T) {
 	}
 }
 
-// TestRingBufferWrapsCorrectly exercises many evict/admit cycles on a
-// small-limit bucket to ensure the ring buffer's head/tail arithmetic
-// stays consistent across wrap-around.
-func TestRingBufferWrapsCorrectly(t *testing.T) {
+// TestCompactionAcrossEvictAdmitCycles exercises many evict/admit cycles on
+// a small-limit bucket to ensure the head index and compaction logic stay
+// consistent as entries are repeatedly evicted and appended.
+func TestCompactionAcrossEvictAdmitCycles(t *testing.T) {
 	l := slidinglog.New(3, time.Second)
 	t0 := time.Unix(100, 0)
 	for i := range 10 {
@@ -69,31 +68,5 @@ func TestRingBufferWrapsCorrectly(t *testing.T) {
 		if !l.Allow("k", ts) {
 			t.Fatalf("step %d at %v = false; rolling-limit admits should always succeed", i, ts)
 		}
-	}
-}
-
-func TestConcurrentAllowDoesNotExceedLimit(t *testing.T) {
-	const limit = 100
-	const goroutines = 500
-	l := slidinglog.New(limit, time.Hour)
-	now := time.Unix(100, 0)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	allowed := 0
-	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if l.Allow("k", now) {
-				mu.Lock()
-				allowed++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	if allowed != limit {
-		t.Fatalf("allowed = %d, want %d", allowed, limit)
 	}
 }

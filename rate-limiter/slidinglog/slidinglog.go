@@ -47,9 +47,9 @@ func New(limit int, window time.Duration) *Limiter {
 
 // Allow reports whether one event for key is permitted at now.
 //
-// If permitted, now is recorded in the key's log. Timestamps strictly older
-// than now-window are evicted on every call, so expired keys' logs shrink
-// to empty (the bucket entry itself is retained).
+// If permitted, now is recorded in the key's log. Timestamps at or before
+// now-window are evicted on every call (the window is (now-window, now]),
+// so expired keys' logs shrink to empty (the bucket entry itself is retained).
 func (l *Limiter) Allow(key string, now time.Time) bool {
 	cutoff := now.Add(-l.window)
 
