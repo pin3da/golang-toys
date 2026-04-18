@@ -24,13 +24,14 @@ type Limiter struct {
 	buckets map[string]*bucket
 }
 
-// bucket is a fixed-capacity ring buffer of at most limit timestamps,
-// ordered oldest-first from head. Using a ring buffer bounds per-key memory
-// to exactly limit entries, independent of churn.
+// bucket is a FIFO of in-window timestamps. Live entries are ts[head:],
+// ordered oldest-first. Storage grows on demand via append (capped at
+// limit) and is compacted when the unused prefix exceeds half the backing
+// array, keeping per-key memory proportional to actual in-window load
+// rather than the configured limit.
 type bucket struct {
 	ts   []time.Time
 	head int
-	size int
 }
 
 // New returns a Limiter that allows at most limit events within any window
@@ -57,23 +58,28 @@ func (l *Limiter) Allow(key string, now time.Time) bool {
 
 	b, ok := l.buckets[key]
 	if !ok {
-		b = &bucket{ts: make([]time.Time, l.limit)}
+		b = &bucket{}
 		l.buckets[key] = b
 	}
 
 	// Evict timestamps at or before the cutoff. Entries are appended in
 	// monotonic order, so the oldest is always at head.
-	for b.size > 0 && !b.ts[b.head].After(cutoff) {
-		b.head = (b.head + 1) % l.limit
-		b.size--
+	for b.head < len(b.ts) && !b.ts[b.head].After(cutoff) {
+		b.head++
 	}
 
-	if b.size >= l.limit {
+	// Compact when the unused prefix has grown past half the backing array
+	// so the log cannot leak unbounded memory under sustained churn.
+	if b.head > 0 && b.head >= len(b.ts)/2 {
+		n := copy(b.ts, b.ts[b.head:])
+		b.ts = b.ts[:n]
+		b.head = 0
+	}
+
+	if len(b.ts)-b.head >= l.limit {
 		return false
 	}
-	tail := (b.head + b.size) % l.limit
-	b.ts[tail] = now
-	b.size++
+	b.ts = append(b.ts, now)
 	return true
 }
 
